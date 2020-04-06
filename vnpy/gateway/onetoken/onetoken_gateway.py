@@ -36,7 +36,6 @@ from vnpy.trader.object import (
 )
 from vnpy.trader.event import EVENT_TIMER
 
-
 REST_HOST = "https://1token.trade/api"
 # DATA_WEBSOCKET_HOST = "wss://1token.trade/api/v1/ws/tick"
 # TRADE_WEBSOCKET_HOST = "wss://1token.trade/api/v1/ws/trade"
@@ -47,10 +46,14 @@ TRADE_WEBSOCKET_HOST = "wss://cdn.1tokentrade.cn/api/v1/ws/trade"
 DIRECTION_VT2ONETOKEN = {Direction.LONG: "b", Direction.SHORT: "s"}
 DIRECTION_ONETOKEN2VT = {v: k for k, v in DIRECTION_VT2ONETOKEN.items()}
 
-
 EXCHANGE_VT2ONETOKEN = {
     Exchange.OKEX: "okex",
-    Exchange.HUOBI: "huobi"
+    Exchange.HUOBI: "huobi",
+    Exchange.BINANCE: "binance",
+    # "OKEF": "okef",
+    # "OKSWAP": "okswap",
+    # "HUOBIF": "huobif",
+    # "BINANCEF": "binancef",
 }
 EXCHANGE_ONETOKEN2VT = {v: k for k, v in EXCHANGE_VT2ONETOKEN.items()}
 
@@ -63,7 +66,7 @@ class OnetokenGateway(BaseGateway):
     default_setting = {
         "OT Key": "",
         "OT Secret": "",
-        "交易所": ["BINANCE", "BITMEX", "OKEX", "OKEF", "HUOBIP", "HUOBIF"],
+        "交易所": ["BINANCE", "BINANCEF", "BITMEX", "OKEX", "OKEF", "OKSWAP", "HUOBIP", "HUOBIF"],
         "账户": "",
         "会话数": 3,
         "代理地址": "127.0.0.1",
@@ -141,6 +144,14 @@ class OnetokenGateway(BaseGateway):
         self.event_engine.register(EVENT_TIMER, self.process_timer_event)
 
 
+def map_exchange_1token_to_vnpy( exg):
+    if exg  in ['huobif', 'huobip']:
+        return 'HUOBI'
+    if exg  in ['okex', 'okef', 'okswap']:
+        return 'OKEX'
+    if exg  in ['binance', 'binancef']:
+        return 'BINANCE'
+    return exg.upper()
 class OnetokenRestApi(RestClient):
     """
     1Token REST API
@@ -210,7 +221,7 @@ class OnetokenRestApi(RestClient):
         self.account = account
 
         self.connect_time = (
-            int(datetime.now().strftime("%y%m%d%H%M%S")) * self.order_count
+                int(datetime.now().strftime("%y%m%d%H%M%S")) * self.order_count
         )
 
         self.init(REST_HOST, proxy_host, proxy_port)
@@ -253,13 +264,14 @@ class OnetokenRestApi(RestClient):
             callback=self.on_query_contract
         )
 
+
     def on_query_contract(self, data, request):
         """"""
         for instrument_data in data:
             symbol = instrument_data["name"]
             contract = ContractData(
                 symbol=symbol,
-                exchange=Exchange(instrument_data['symbol'].split('/')[0].upper()),
+                exchange=Exchange(map_exchange_1token_to_vnpy(instrument_data['symbol'].split('/')[0])),
                 name=symbol,
                 product=Product.SPOT,  # todo
                 size=float(instrument_data["min_amount"]),
@@ -275,7 +287,13 @@ class OnetokenRestApi(RestClient):
 
     def send_order(self, req: OrderRequest):
         """"""
-        orderid = str(self.connect_time + self._new_order_id())
+        # orderid = str(self.connect_time + self._new_order_id())
+        # 火币的client oid 只能是纯数字
+        if self.exchange in ['huobip', 'huobif', 'huobim']:
+            prefix = ''
+        else:
+            prefix = self.exchange
+        orderid = self.exchange + '/' + req.symbol + '-' + prefix + str(self.connect_time + self._new_order_id())
 
         data = {
             "contract": self.exchange + "/" + req.symbol,
@@ -380,9 +398,9 @@ class OnetokenDataWebsocketApi(WebsocketClient):
         }
 
     def connect(
-        self,
-        proxy_host: str,
-        proxy_port: int
+            self,
+            proxy_host: str,
+            proxy_port: int
     ):
         """"""
         self.init(DATA_WEBSOCKET_HOST, proxy_host, proxy_port)
@@ -452,7 +470,7 @@ class OnetokenDataWebsocketApi(WebsocketClient):
         self.gateway.write_log("行情Websocket API登录成功")
         for req in list(self.subscribed.values()):
             self.subscribe(req)
-            
+
     def on_tick(self, data: dict):
         """"""
         contract_symbol = data["contract"]
@@ -506,13 +524,13 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
         }
 
     def connect(
-        self,
-        key: str,
-        secret: str,
-        exchange: str,
-        account: str,
-        proxy_host: str,
-        proxy_port: int
+            self,
+            key: str,
+            secret: str,
+            exchange: str,
+            account: str,
+            proxy_host: str,
+            proxy_port: int
     ):
         """"""
         self.key = key
@@ -649,11 +667,12 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
             exchange_str, symbol = contract_symbol.split("/")
             timestamp = order_data["entrust_time"][11:19]
 
-            orderid = order_data["options"]["client_oid"]
+            orderid = order_data["client_oid"]
 
             order = OrderData(
                 symbol=symbol,
-                exchange=EXCHANGE_ONETOKEN2VT[exchange_str],
+                # exchange=EXCHANGE_ONETOKEN2VT[exchange_str],
+                exchange=Exchange(map_exchange_1token_to_vnpy(exchange_str)),
                 orderid=orderid,
                 direction=DIRECTION_ONETOKEN2VT[order_data["bs"]],
                 price=order_data["entrust_price"],
