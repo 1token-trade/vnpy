@@ -12,7 +12,7 @@
 
 * 输入测试 OT Secret: `NNXveWWx-TqbNNtMZ-xB6sska0-CVDQBP40`
 * 交易所选择 OKEX
-* 账号填写 mock-vnpyplay
+* 账号填写 mock-vnpytest
 * 代理地址留空
 * 代理端口填0
 
