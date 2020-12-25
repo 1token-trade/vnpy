@@ -12,6 +12,7 @@ from threading import Lock
 from typing import Dict
 from urllib.parse import urlparse
 
+from pytz import utc as UTC_TZ
 from requests import ConnectionError
 
 from vnpy.api.rest import Request, RestClient
@@ -56,7 +57,6 @@ EXCHANGE_VT2ONETOKEN = {
 }
 
 # EXCHANGE_ONETOKEN2VT = {v: k for k, v in EXCHANGE_VT2ONETOKEN.items()}
-
 
 # def exg_vnpy2ot(exg):
 #     return exg
@@ -743,7 +743,7 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
         for order_data in data:
             contract_symbol = order_data["contract"]
             exchange_str, symbol = contract_symbol.split("/")
-            timestamp = order_data["entrust_time"][11:19]
+            timestamp = order_data["entrust_time"]
 
             orderid = order_data["client_oid"]
 
@@ -755,7 +755,7 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
                 price=order_data["entrust_price"],
                 volume=order_data["entrust_amount"],
                 traded=order_data["dealt_amount"],
-                time=timestamp,
+                datetime=generate_datetime(timestamp),
                 gateway_name=self.gateway_name
             )
 
@@ -775,7 +775,7 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
             if not order_data["last_dealt_amount"]:
                 return
 
-            trade_timestamp = order_data["last_update"][11:19]
+            trade_timestamp = order_data["last_update"]
             self.trade_count += 1
             if order_data["dealt_amount"]:
                 self.trade_count += 1
@@ -788,9 +788,26 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
                     price=order_data["average_dealt_price"],
                     volume=order_data["dealt_amount"],
                     gateway_name=self.gateway_name,
-                    time=trade_timestamp)
+                    datetime=generate_datetime(trade_timestamp))
                 self.gateway.on_trade(trade)
 
     def ping(self):
         """"""
         self.send_packet({"uri": "ping"})
+
+
+def generate_datetime(timestamp: str) -> datetime:
+    """
+    "2020-12-25T18:33:28.098024+08:00"
+    "2020-12-25T10:33:28.098024+00:00"
+    "2020-12-25T10:33:28.098024Z"
+    :param timestamp:
+    :return:
+    """
+    if timestamp.endswith('Z'):
+        timestamp = timestamp[:-1]
+    else:
+        timestamp = timestamp[:-6]
+    dt = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%f")
+    dt = UTC_TZ.localize(dt)
+    return dt

@@ -2,9 +2,10 @@
 Basic data structure used for general trading function in VN Trader.
 """
 
-from dataclasses import dataclass
 from datetime import datetime
 from logging import INFO
+
+from dataclasses import dataclass
 
 from .constant import Direction, Exchange, Interval, Offset, Status, Product, OptionType, OrderType
 
@@ -111,13 +112,14 @@ class OrderData(BaseData):
     orderid: str
 
     type: OrderType = OrderType.LIMIT
-    direction: Direction = ""
+    direction: Direction = None
     offset: Offset = Offset.NONE
     price: float = 0
     volume: float = 0
     traded: float = 0
     status: Status = Status.SUBMITTING
-    time: str = ""
+    datetime: datetime = None
+    reference: str = ""
 
     def __post_init__(self):
         """"""
@@ -154,12 +156,12 @@ class TradeData(BaseData):
     exchange: Exchange
     orderid: str
     tradeid: str
-    direction: Direction = ""
+    direction: Direction = None
 
     offset: Offset = Offset.NONE
     price: float = 0
     volume: float = 0
-    time: str = ""
+    datetime: datetime = None
 
     def __post_init__(self):
         """"""
@@ -235,17 +237,17 @@ class ContractData(BaseData):
     size: int
     pricetick: float
 
-    min_volume: float = 1           # minimum trading volume of the contract
-    stop_supported: bool = False    # whether server supports stop order
-    net_position: bool = False      # whether gateway uses net position volume
-    history_data: bool = False      # whether gateway provides bar history data
+    min_volume: float = 1  # minimum trading volume of the contract
+    stop_supported: bool = False  # whether server supports stop order
+    net_position: bool = False  # whether gateway uses net position volume
+    history_data: bool = False  # whether gateway provides bar history data
 
     option_strike: float = 0
-    option_underlying: str = ""     # vt_symbol of underlying contract
+    option_underlying: str = ""  # vt_symbol of underlying contract
     option_type: OptionType = None
     option_expiry: datetime = None
     option_portfolio: str = ""
-    option_index: str = ""          # for identifying options with same strike price
+    option_index: str = ""  # for identifying options with same strike price
 
     def __post_init__(self):
         """"""
