@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from vnpy.trader.ui import QtWidgets, QtCore
 from vnpy.trader.engine import MainEngine, EventEngine
 from vnpy.trader.constant import Interval, Exchange
+from vnpy.trader.database.database import DB_TZ
 
 from ..engine import APP_NAME, ManagerEngine
 
@@ -437,7 +438,7 @@ class DateRangeDialog(QtWidgets.QDialog):
     def get_date_range(self) -> Tuple[datetime, datetime]:
         """"""
         start = self.start_edit.date().toPyDate()
-        end = self.end_edit.date().toPyDate()
+        end = self.end_edit.date().toPyDate() + timedelta(days=1)
         return start, end
 
 
@@ -470,7 +471,8 @@ class ImportDialog(QtWidgets.QDialog):
 
         self.interval_combo = QtWidgets.QComboBox()
         for i in Interval:
-            self.interval_combo.addItem(str(i.name), i)
+            if i != Interval.TICK:
+                self.interval_combo.addItem(str(i.name), i)
 
         self.datetime_edit = QtWidgets.QLineEdit("datetime")
         self.open_edit = QtWidgets.QLineEdit("open")
@@ -581,6 +583,10 @@ class DownloadDialog(QtWidgets.QDialog):
 
         start_date = self.start_date_edit.date()
         start = datetime(start_date.year(), start_date.month(), start_date.day())
+        start = DB_TZ.localize(start)
 
-        count = self.engine.download_bar_data(symbol, exchange, interval, start)
+        if interval == Interval.TICK:
+            count = self.engine.download_tick_data(symbol, exchange, start)
+        else:
+            count = self.engine.download_bar_data(symbol, exchange, interval, start)
         QtWidgets.QMessageBox.information(self, "下载结束", f"下载总数据量：{count}条")

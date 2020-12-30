@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Tuple
+import pytz
 
 from vnpy.api.tap import MdApi, TdApi
 from vnpy.event import EventEngine
@@ -65,8 +66,9 @@ STATUS_TAP2VT: Dict[str, Status] = {
     "4": Status.NOTTRADED,
     "5": Status.PARTTRADED,
     "6": Status.ALLTRADED,
-    "7": Status.CANCELLED,
     "9": Status.CANCELLED,
+    "A": Status.CANCELLED,
+    "B": Status.REJECTED,
 }
 
 ORDERTYPE_TAP2VT: Dict[str, OrderType] = {
@@ -96,6 +98,8 @@ FLAG_VT2TAP: Dict[str, str] = {
     "TAPI_CALLPUT_FLAG_PUT": "P",
     "TAPI_CALLPUT_FLAG_NONE": "N"
 }
+
+CHINA_TZ = pytz.timezone("Asia/Shanghai")
 
 
 class TapGateway(BaseGateway):
@@ -201,7 +205,7 @@ class QuoteApi(MdApi):
         """
         Callback when API is ready for sending requests or queries.
         """
-        pass
+        self.qryCommodity()
 
     def onDisconnect(self, reason: int) -> None:
         """
@@ -230,6 +234,86 @@ class QuoteApi(MdApi):
         """
         self.update_tick(data)
 
+    def onRspQryCommodity(
+        self,
+        session: int,
+        error: int,
+        last: str,
+        data: dict,
+    ) -> None:
+        """
+        Callback of commodity query with size and pricetick data.
+        """
+        if error != ERROR_VT2TAP["TAPIERROR_SUCCEED"]:
+            self.gateway.write_log("查询交易品种信息失败")
+            return
+
+        commodity_info = CommodityInfo(
+            name=data["CommodityEngName"],
+            size=int(data["ContractSize"]),
+            pricetick=data["CommodityTickSize"]
+        )
+        key = (data["ExchangeNo"], data["CommodityNo"], data["CommodityType"])
+        commodity_infos[key] = commodity_info
+
+        if last == "Y":
+            self.gateway.write_log("查询交易品种信息成功")
+            req = {}
+            self.qryContract(req)
+
+    def onRspQryContract(
+        self,
+        session: int,
+        error: int,
+        last: str,
+        data: dict
+    ) -> None:
+        """
+        Callback of contract query with detailed contract data.
+        """
+        if error != ERROR_VT2TAP["TAPIERROR_SUCCEED"]:
+            self.gateway.write_log("查询交易合约信息失败")
+            return
+
+        exchange = EXCHANGE_TAP2VT.get(data["ExchangeNo"], None)
+        key = (data["ExchangeNo"], data["CommodityNo"], data["CommodityType"])
+        commodity_info = commodity_infos.get(key, None)
+
+        if not data or not exchange or not commodity_info:
+            return
+
+        if data["CommodityType"] == "F":
+            symbol = data["CommodityNo"] + data["ContractNo1"]
+
+            if commodity_info.name:
+                name = f"{commodity_info.name} {data['ContractNo1']}"
+            else:
+                name = symbol
+
+            contract = ContractData(
+                symbol=symbol,
+                exchange=exchange,
+                name=name,
+                product=Product.FUTURES,
+                size=commodity_info.size,
+                pricetick=commodity_info.pricetick,
+                net_position=True,
+                gateway_name=self.gateway.gateway_name
+            )
+            self.gateway.on_contract(contract)
+
+            contract_info = ContractInfo(
+                name=contract.name,
+                exchange_no=data["ExchangeNo"],
+                contract_no=data["ContractNo1"],
+                commodity_type=data["CommodityType"],
+                commodity_no=data["CommodityNo"],
+            )
+            contract_infos[(contract.symbol, contract.exchange)] = contract_info
+
+        if last == "Y":
+            self.gateway.write_log("查询交易合约信息成功")
+
     def update_tick(self, data: dict) -> None:
         """
         Convert TAP quote data structure into TickData event and push it.
@@ -245,7 +329,7 @@ class QuoteApi(MdApi):
         tick = TickData(
             symbol=symbol,
             exchange=exchange,
-            datetime=parse_datetime(data["DateTimeStamp"]),
+            datetime=generate_datetime(data["DateTimeStamp"]),
             name=contract_info.name,
             volume=data["QTotalQty"],
             last_price=data["QLastPrice"],
@@ -377,7 +461,7 @@ class TradeApi(TdApi):
         """
         Callback when API is ready for sending requests or queries.
         """
-        self.qryCommodity()
+        self.query_account()
 
     def onRspQryCommodity(
         self,
@@ -636,6 +720,10 @@ class TradeApi(TdApi):
         """
         Convert TAP order data structure into OrderData event and push it.
         """
+        # Filter canceling and modifying order state update
+        if data["OrderState"] in {"7", "8"}:
+            return
+
         self.local_sys_map[data["ClientOrderNo"]] = data["OrderNo"]
         self.sys_local_map[data["OrderNo"]] = data["ClientOrderNo"]
         self.sys_server_map[data["OrderNo"]] = data["ServerFlag"]
@@ -650,7 +738,7 @@ class TradeApi(TdApi):
             volume=data["OrderQty"],
             traded=data["OrderMatchQty"],
             status=STATUS_TAP2VT.get(data["OrderState"], Status.SUBMITTING),
-            time=data["OrderInsertTime"],
+            datetime=generate_datetime(data["OrderInsertTime"]),
             gateway_name=self.gateway_name
         )
         self.gateway.on_order(order)
@@ -674,7 +762,7 @@ class TradeApi(TdApi):
             direction=DIRECTION_TAP2VT[data["MatchSide"]],
             price=data["MatchPrice"],
             volume=data["MatchQty"],
-            time=data["MatchDateTime"],
+            datetime=generate_datetime(data["MatchDateTime"]),
             gateway_name=self.gateway_name
         )
         self.gateway.on_trade(trade)
@@ -801,14 +889,19 @@ class TradeApi(TdApi):
         self.qryFill({})
 
 
-def parse_datetime(dt_str: str) -> datetime:
+def generate_datetime(timestamp: str) -> datetime:
     """
     Convert timestamp string to datetime object.
     """
-    try:
-        dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S.%f")
-    except ValueError:
-        dt = datetime(1970, 1, 1)
+    if "-" in timestamp:
+        if "." in timestamp:
+            dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S.%f")
+        else:
+            dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+    else:
+        dt = datetime.strptime(timestamp, "%y%m%d%H%M%S.%f")
+
+    dt = CHINA_TZ.localize(dt)
     return dt
 
 
