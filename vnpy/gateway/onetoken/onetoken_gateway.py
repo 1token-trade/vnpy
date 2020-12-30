@@ -670,11 +670,7 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
         for order_data in data:
             contract_symbol = order_data["contract"]
             exchange_str, symbol = contract_symbol.split("/")
-<<<<<<< HEAD
             timestamp = order_data["entrust_time"]
-=======
-            timestamp = order_data["entrust_time"][:-6]
->>>>>>> upstream/master
 
             orderid = order_data["options"]["client_oid"]
 
@@ -706,11 +702,7 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
             if not order_data["last_dealt_amount"]:
                 return
 
-<<<<<<< HEAD
             trade_timestamp = order_data["last_update"]
-=======
-            trade_timestamp = order_data["last_update"][:-6]
->>>>>>> upstream/master
             self.trade_count += 1
             if order_data["dealt_amount"]:
                 self.trade_count += 1
@@ -723,12 +715,8 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
                     price=order_data["average_dealt_price"],
                     volume=order_data["dealt_amount"],
                     gateway_name=self.gateway_name,
-<<<<<<< HEAD
-                    datetime=generate_datetime(trade_timestamp))
-=======
                     datetime=generate_datetime(trade_timestamp)
                 )
->>>>>>> upstream/master
                 self.gateway.on_trade(trade)
 
     def ping(self):
@@ -737,7 +725,6 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
 
 
 def generate_datetime(timestamp: str) -> datetime:
-<<<<<<< HEAD
     """
     "2020-12-25T18:33:28.098024+08:00"
     "2020-12-25T10:33:28.098024+00:00"
@@ -751,8 +738,4 @@ def generate_datetime(timestamp: str) -> datetime:
         timestamp = timestamp[:-6]
     dt = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%f")
     dt = UTC_TZ.localize(dt)
-=======
-    dt = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%f")
-    dt = CHINA_TZ.localize(dt)
->>>>>>> upstream/master
     return dt
