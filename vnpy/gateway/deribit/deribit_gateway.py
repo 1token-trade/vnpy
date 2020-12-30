@@ -1,3 +1,4 @@
+import pytz
 from typing import Callable
 
 from vnpy.trader.object import (
@@ -51,6 +52,8 @@ STATUS_DERIBIT2VT = {
     "rejected": Status.REJECTED,
     "cancelled": Status.CANCELLED,
 }
+
+UTC_TZ = pytz.utc
 
 
 class DeribitGateway(BaseGateway):
@@ -168,7 +171,7 @@ class DeribitWebsocketApi(WebsocketClient):
         self.secret = secret
 
         self.connect_time = (
-            int(datetime.now().strftime("%y%m%d%H%M%S")) * self.order_count
+            int(datetime.now(UTC_TZ).strftime("%y%m%d%H%M%S")) * self.order_count
         )
 
         self.init(WEBSOCKET_HOST, proxy_host, proxy_port)
@@ -182,7 +185,7 @@ class DeribitWebsocketApi(WebsocketClient):
             gateway_name=self.gateway_name,
             symbol=symbol,
             exchange=Exchange.DERIBIT,
-            datetime=datetime.now(),
+            datetime=datetime.now(UTC_TZ),
         )
 
         params = {
@@ -392,14 +395,20 @@ class DeribitWebsocketApi(WebsocketClient):
             )
 
             if contract.product == Product.OPTION:
+                option_expiry = datetime.fromtimestamp(
+                    d["expiration_timestamp"] / 1000
+                )
+                option_underlying = "_".join([
+                    d["base_currency"],
+                    option_expiry.strftime("%Y%m%d")
+                ])
+
                 contract.option_portfolio = d["base_currency"]
                 contract.option_strike = d["strike"]
                 contract.option_index = str(d["strike"])
-                contract.option_underlying = d["base_currency"]
+                contract.option_underlying = option_underlying
                 contract.option_type = OPTIONTYPE_DERIBIT2VT[d["option_type"]]
-                contract.option_expiry = datetime.fromtimestamp(
-                    d["expiration_timestamp"] / 1000
-                )
+                contract.option_expiry = option_expiry
 
             self.gateway.on_contract(contract)
 
@@ -480,7 +489,7 @@ class DeribitWebsocketApi(WebsocketClient):
             price=float(data["price"]),
             volume=float(data["amount"]),
             traded=float(data["filled_amount"]),
-            time=str(datetime.fromtimestamp(data["last_update_timestamp"] / 1000)),
+            datetime=generate_datetime(data["last_update_timestamp"]),
             status=STATUS_DERIBIT2VT[data["order_state"]],
             gateway_name=self.gateway_name,
         )
@@ -531,7 +540,7 @@ class DeribitWebsocketApi(WebsocketClient):
             price=float(data["price"]),
             volume=float(data["amount"]),
             traded=float(data["filled_amount"]),
-            time=str(datetime.fromtimestamp(data["last_update_timestamp"] / 1000)),
+            datetime=generate_datetime(data["last_update_timestamp"]),
             status=STATUS_DERIBIT2VT[data["order_state"]],
             gateway_name=self.gateway_name,
         )
@@ -561,7 +570,7 @@ class DeribitWebsocketApi(WebsocketClient):
             direction=DIRECTION_DERIBIT2VT[data["direction"]],
             price=float(data["price"]),
             volume=float(data["amount"]),
-            time=str(datetime.fromtimestamp(data["timestamp"] / 1000)),
+            datetime=generate_datetime(data["timestamp"]),
             gateway_name=self.gateway_name,
         )
 
@@ -606,7 +615,19 @@ class DeribitWebsocketApi(WebsocketClient):
         tick.high_price = data["stats"]["high"]
         tick.low_price = data["stats"]["low"]
         tick.volume = data["stats"]["volume"]
-        tick.datetime = datetime.fromtimestamp(data["timestamp"] / 1000)
+        tick.datetime = generate_datetime(data["timestamp"])
+
+        if tick.last_price is None:
+            tick.last_price = (tick.bid_price_1 + tick.ask_price_1) / 2
+
+        if tick.volume is None:
+            tick.volume = 0
+
+        if tick.high_price is None:
+            tick.high_price = 0
+
+        if tick.low_price is None:
+            tick.low_price = 0
 
         self.gateway.on_tick(copy(tick))
 
@@ -658,3 +679,10 @@ class DeribitWebsocketApi(WebsocketClient):
             self.reqid_currency_map[self.reqid] = params["currency"]
 
         return self.reqid
+
+
+def generate_datetime(timestamp: float) -> datetime:
+    """"""
+    dt = datetime.fromtimestamp(timestamp / 1000)
+    dt = UTC_TZ.localize(dt)
+    return dt

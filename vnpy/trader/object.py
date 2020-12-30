@@ -111,13 +111,14 @@ class OrderData(BaseData):
     orderid: str
 
     type: OrderType = OrderType.LIMIT
-    direction: Direction = ""
+    direction: Direction = None
     offset: Offset = Offset.NONE
     price: float = 0
     volume: float = 0
     traded: float = 0
     status: Status = Status.SUBMITTING
-    time: str = ""
+    datetime: datetime = None
+    reference: str = ""
 
     def __post_init__(self):
         """"""
@@ -154,12 +155,12 @@ class TradeData(BaseData):
     exchange: Exchange
     orderid: str
     tradeid: str
-    direction: Direction = ""
+    direction: Direction = None
 
     offset: Offset = Offset.NONE
     price: float = 0
     volume: float = 0
-    time: str = ""
+    datetime: datetime = None
 
     def __post_init__(self):
         """"""
@@ -232,7 +233,7 @@ class ContractData(BaseData):
     exchange: Exchange
     name: str
     product: Product
-    size: int
+    size: float
     pricetick: float
 
     min_volume: float = 1           # minimum trading volume of the contract
@@ -279,6 +280,7 @@ class OrderRequest:
     volume: float
     price: float = 0
     offset: Offset = Offset.NONE
+    reference: str = ""
 
     def __post_init__(self):
         """"""
@@ -297,6 +299,7 @@ class OrderRequest:
             offset=self.offset,
             price=self.price,
             volume=self.volume,
+            reference=self.reference,
             gateway_name=gateway_name,
         )
         return order

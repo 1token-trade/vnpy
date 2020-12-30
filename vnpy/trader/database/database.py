@@ -2,10 +2,16 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import Enum
 from typing import Optional, Sequence, List, Dict, TYPE_CHECKING
+from pytz import timezone
+
+from vnpy.trader.setting import SETTINGS
 
 if TYPE_CHECKING:
     from vnpy.trader.constant import Interval, Exchange  # noqa
     from vnpy.trader.object import BarData, TickData  # noqa
+
+
+DB_TZ = timezone(SETTINGS["database.timezone"])
 
 
 class Driver(Enum):
@@ -13,6 +19,7 @@ class Driver(Enum):
     MYSQL = "mysql"
     POSTGRESQL = "postgresql"
     MONGODB = "mongodb"
+    INFLUX = "influxdb"
 
 
 class BaseDatabaseManager(ABC):
@@ -98,6 +105,18 @@ class BaseDatabaseManager(ABC):
     ) -> List[Dict]:
         """
         Return data avaible in database with a list of symbol/exchange/interval/count.
+        """
+        pass
+
+    @abstractmethod
+    def delete_bar_data(
+        self,
+        symbol: str,
+        exchange: "Exchange",
+        interval: "Interval"
+    ) -> int:
+        """
+        Delete all bar data with given symbol + exchange + interval.
         """
         pass
 

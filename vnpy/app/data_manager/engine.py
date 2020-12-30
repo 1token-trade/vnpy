@@ -4,8 +4,9 @@ from typing import List, Dict, Tuple
 
 from vnpy.trader.engine import BaseEngine, MainEngine, EventEngine
 from vnpy.trader.constant import Interval, Exchange
-from vnpy.trader.object import BarData
+from vnpy.trader.object import BarData, HistoryRequest
 from vnpy.trader.database import database_manager
+from vnpy.trader.rqdata import rqdata_client
 
 
 APP_NAME = "DataManager"
@@ -60,12 +61,12 @@ class ManagerEngine(BaseEngine):
                 exchange=exchange,
                 datetime=dt,
                 interval=interval,
-                volume=item[volume_head],
-                open_price=item[open_head],
-                high_price=item[high_head],
-                low_price=item[low_head],
-                close_price=item[close_head],
-                open_interest=open_interest,
+                volume=float(item[volume_head]),
+                open_price=float(item[open_head]),
+                high_price=float(item[high_head]),
+                low_price=float(item[low_head]),
+                close_price=float(item[close_head]),
+                open_interest=float(open_interest),
                 gateway_name="DB",
             )
 
@@ -164,3 +165,84 @@ class ManagerEngine(BaseEngine):
         )
 
         return bars
+
+    def delete_bar_data(
+        self,
+        symbol: str,
+        exchange: Exchange,
+        interval: Interval
+    ) -> int:
+        """"""
+        count = database_manager.delete_bar_data(
+            symbol,
+            exchange,
+            interval
+        )
+
+        return count
+
+    def download_bar_data(
+        self,
+        symbol: str,
+        exchange: Exchange,
+        interval: str,
+        start: datetime
+    ) -> int:
+        """
+        Query bar data from RQData.
+        """
+        req = HistoryRequest(
+            symbol=symbol,
+            exchange=exchange,
+            interval=Interval(interval),
+            start=start,
+            end=datetime.now()
+        )
+
+        vt_symbol = f"{symbol}.{exchange.value}"
+        contract = self.main_engine.get_contract(vt_symbol)
+
+        # If history data provided in gateway, then query
+        if contract and contract.history_data:
+            data = self.main_engine.query_history(
+                req, contract.gateway_name
+            )
+        # Otherwise use RQData to query data
+        else:
+            if not rqdata_client.inited:
+                rqdata_client.init()
+
+            data = rqdata_client.query_history(req)
+
+        if data:
+            database_manager.save_bar_data(data)
+            return(len(data))
+
+        return 0
+
+    def download_tick_data(
+        self,
+        symbol: str,
+        exchange: Exchange,
+        start: datetime
+    ) -> int:
+        """
+        Query tick data from RQData.
+        """
+        req = HistoryRequest(
+            symbol=symbol,
+            exchange=exchange,
+            start=start,
+            end=datetime.now()
+        )
+
+        if not rqdata_client.inited:
+            rqdata_client.init()
+
+        data = rqdata_client.query_tick_history(req)
+
+        if data:
+            database_manager.save_tick_data(data)
+            return(len(data))
+
+        return 0

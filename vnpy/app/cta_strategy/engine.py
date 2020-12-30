@@ -9,6 +9,7 @@ from typing import Any, Callable
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from copy import copy
+from tzlocal import get_localzone
 
 from vnpy.event import Event, EventEngine
 from vnpy.trader.engine import BaseEngine, MainEngine
@@ -310,6 +311,7 @@ class CtaEngine(BaseEngine):
             type=type,
             price=price,
             volume=volume,
+            reference=f"{APP_NAME}_{strategy.strategy_name}"
         )
 
         # Convert with offset converter
@@ -509,6 +511,17 @@ class CtaEngine(BaseEngine):
         """"""
         return self.engine_type
 
+    def get_pricetick(self, strategy: CtaTemplate):
+        """
+        Return contract pricetick data.
+        """
+        contract = self.main_engine.get_contract(strategy.vt_symbol)
+
+        if contract:
+            return contract.pricetick
+        else:
+            return None
+
     def load_bar(
         self,
         vt_symbol: str,
@@ -519,7 +532,7 @@ class CtaEngine(BaseEngine):
     ):
         """"""
         symbol, exchange = extract_vt_symbol(vt_symbol)
-        end = datetime.now()
+        end = datetime.now(get_localzone())
         start = end - timedelta(days)
         bars = []
 
@@ -606,6 +619,15 @@ class CtaEngine(BaseEngine):
         strategy_class = self.classes.get(class_name, None)
         if not strategy_class:
             self.write_log(f"创建策略失败，找不到策略类{class_name}")
+            return
+
+        if "." not in vt_symbol:
+            self.write_log("创建策略失败，本地代码缺失交易所后缀")
+            return
+
+        _, exchange_str = vt_symbol.split(".")
+        if exchange_str not in Exchange.__members__:
+            self.write_log("创建策略失败，本地代码的交易所后缀不正确")
             return
 
         strategy = strategy_class(self, strategy_name, vt_symbol, setting)
@@ -761,16 +783,9 @@ class CtaEngine(BaseEngine):
         """
         for dirpath, dirnames, filenames in os.walk(str(path)):
             for filename in filenames:
-                if filename.endswith(".py"):
-                    strategy_module_name = ".".join(
-                        [module_name, filename.replace(".py", "")])
-                elif filename.endswith(".pyd"):
-                    strategy_module_name = ".".join(
-                        [module_name, filename.split(".")[0]])
-                else:
-                    continue
-
-                self.load_strategy_class_from_module(strategy_module_name)
+                if filename.split(".")[-1] in ("py", "pyd", "so"):
+                    strategy_module_name = ".".join([module_name, filename.split(".")[0]])
+                    self.load_strategy_class_from_module(strategy_module_name)
 
     def load_strategy_class_from_module(self, module_name: str):
         """
@@ -906,7 +921,7 @@ class CtaEngine(BaseEngine):
         if strategy:
             msg = f"{strategy.strategy_name}: {msg}"
 
-        log = LogData(msg=msg, gateway_name="CtaStrategy")
+        log = LogData(msg=msg, gateway_name=APP_NAME)
         event = Event(type=EVENT_CTA_LOG, data=log)
         self.event_engine.put(event)
 
