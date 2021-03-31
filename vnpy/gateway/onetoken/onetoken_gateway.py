@@ -2,17 +2,18 @@
 """
 
 import hashlib
-import sys
 import hmac
 import json
+import sys
 import time
+from copy import copy
 from datetime import datetime
 from threading import Lock
+from typing import Dict
 from urllib.parse import urlparse
-from copy import copy
 
+from pytz import utc as UTC_TZ
 from requests import ConnectionError
-import pytz
 
 from vnpy.api.rest import Request, RestClient
 from vnpy.api.websocket import WebsocketClient
@@ -23,6 +24,7 @@ from vnpy.trader.constant import (
     Offset,
     Product
 )
+from vnpy.trader.event import EVENT_TIMER
 from vnpy.trader.gateway import BaseGateway
 from vnpy.trader.object import (
     TickData,
@@ -35,9 +37,8 @@ from vnpy.trader.object import (
     OrderData,
     TradeData
 )
-from vnpy.trader.event import EVENT_TIMER
 
-REST_HOST = "https://1token.trade/api"
+REST_HOST = "https://cdn.1tokentrade.cn/api"
 # DATA_WEBSOCKET_HOST = "wss://1token.trade/api/v1/ws/tick"
 # TRADE_WEBSOCKET_HOST = "wss://1token.trade/api/v1/ws/trade"
 
@@ -55,10 +56,7 @@ EXCHANGE_VT2ONETOKEN = {
     Exchange.GATEIO: "gateio",
 }
 
-CHINA_TZ = pytz.timezone("Asia/Shanghai")
-
 # EXCHANGE_ONETOKEN2VT = {v: k for k, v in EXCHANGE_VT2ONETOKEN.items()}
-
 
 # def exg_vnpy2ot(exg):
 #     return exg
@@ -75,9 +73,51 @@ exg_mapping = {
     'binancef': 'binance',
     'bitmex': 'bitmex',
     'gate': 'gateio',
->>>>>>> upstream/master
 }
-EXCHANGE_ONETOKEN2VT = {v: k for k, v in EXCHANGE_VT2ONETOKEN.items()}
+
+
+def exg_ot2vnpy(exg):
+    return exg_mapping[exg].upper()
+
+
+def exg_vnpy2ot(exg):
+    """
+    gateio/GATEIO -> gate
+
+    :param exg:
+    :return:
+    """
+    mapping = {
+        'huobi': 'huobip',
+        'gateio': 'gate',
+    }
+    return mapping.get(exg.lower(), exg.lower())
+
+
+def contract_vnpy2ot(exg, name):
+    """
+
+    :param exg:  okex
+    :param name:  btc.usd.q
+    :return:
+    """
+    if exg == 'okex':
+        if name.endswith('.td'):
+            return f'okswap/{name}'
+        if len(name.split('.')) == 3:
+            return f'okef/{name}'
+
+    if exg == 'binance':
+        if name.endswith('.td'):
+            return f'binancef/{name}'
+
+    if exg == 'huobi':
+        if name.endswith('.td'):
+            return f'huobiswap/{name}'
+        if len(name.split('.')) == 3:
+            return f'huobif/{name}'
+
+    return f'{exg_vnpy2ot(exg)}/{name}'
 
 
 class OnetokenGateway(BaseGateway):
@@ -88,11 +128,11 @@ class OnetokenGateway(BaseGateway):
     default_setting = {
         "OT Key": "",
         "OT Secret": "",
-        "交易所": ["BINANCE", "BINANCEF", "BITMEX", "OKEX", "OKEF", "OKSWAP", "HUOBIP", "HUOBIF"],
+        "交易所": ["OKEX", "OKEF", "OKSWAP", "BINANCE", "BINANCEF", "BITMEX", "HUOBIP", "HUOBIF"],
         "账户": "",
         "会话数": 3,
-        "代理地址": "127.0.0.1",
-        "代理端口": 1080,
+        "代理地址": "",
+        "代理端口": 0,
     }
 
     exchanges = list(EXCHANGE_VT2ONETOKEN.keys())
@@ -109,8 +149,8 @@ class OnetokenGateway(BaseGateway):
 
     def connect(self, setting: dict):
         """"""
-        key = setting["OT Key"]
-        secret = setting["OT Secret"]
+        key = setting["OT Key"].strip()
+        secret = setting["OT Secret"].strip()
         session_number = setting["会话数"]
         exchange = setting["交易所"].lower()
         account = setting["账户"]
@@ -166,14 +206,6 @@ class OnetokenGateway(BaseGateway):
         self.event_engine.register(EVENT_TIMER, self.process_timer_event)
 
 
-def map_exchange_1token_to_vnpy( exg):
-    if exg  in ['huobif', 'huobip']:
-        return 'HUOBI'
-    if exg  in ['okex', 'okef', 'okswap']:
-        return 'OKEX'
-    if exg  in ['binance', 'binancef']:
-        return 'BINANCE'
-    return exg.upper()
 class OnetokenRestApi(RestClient):
     """
     1Token REST API
@@ -242,7 +274,7 @@ class OnetokenRestApi(RestClient):
         self.exchange = exchange
         self.account = account
 
-        self.connect_time = int(datetime.now(CHINA_TZ).strftime("%y%m%d%H%M%S")) * self.order_count
+        self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S")) * self.order_count
 
         self.init(REST_HOST, proxy_host, proxy_port)
 
@@ -284,14 +316,14 @@ class OnetokenRestApi(RestClient):
             callback=self.on_query_contract
         )
 
-
     def on_query_contract(self, data, request):
         """"""
         for instrument_data in data:
             symbol = instrument_data["name"]
             contract = ContractData(
                 symbol=symbol,
-                exchange=Exchange(map_exchange_1token_to_vnpy(instrument_data['symbol'].split('/')[0])),
+                exchange=Exchange(exg_ot2vnpy(
+                    instrument_data['symbol'].split('/')[0])),
                 name=symbol,
                 product=Product.SPOT,  # todo
                 size=float(instrument_data["min_amount"]),
@@ -301,19 +333,44 @@ class OnetokenRestApi(RestClient):
             self.gateway.on_contract(contract)
         self.gateway.write_log("合约信息查询成功")
 
+        self.get_info()
+
+    def get_clientoid_prefix(self, contract):
+        """
+
+        :param contract:  btc.usdt
+        :return:
+        """
+        if self.exchange in ['huobif', 'huobip', 'huobiswap']:
+            return self.exchange + "/" + contract + "-"
+        return self.exchange + "/" + contract + "-" + self.exchange
+
+    def get_info(self):
+        self.add_request(
+            method="GET",
+            path="/v1/trade/{}/{}/info".format(self.exchange, self.account),
+            callback=self.on_get_info,
+            data={},
+            params={},
+            on_failed=self.on_get_info_fail,
+            on_error=self.on_get_info_error,
+        )
+
+    def on_get_info(self, data, request):
+        self.gateway.write_log(f"获取账户信息成功")
         # Start websocket api after instruments data collected
         self.gateway.data_ws_api.start()
         self.gateway.trade_ws_api.start()
 
+    def on_get_info_fail(self, status_code: str, request: Request):
+        self.gateway.write_log(f"获取账户信息失败 {request.response.json()}")
+
+    def on_get_info_error(self, exception_type: type, exception_value: Exception, tb, request: Request):
+        self.gateway.write_log(f"获取账户信息失败 {exception_type} {exception_value} {tb} {request}")
+
     def send_order(self, req: OrderRequest):
         """"""
-        # orderid = str(self.connect_time + self._new_order_id())
-        # 火币的client oid 只能是纯数字
-        if self.exchange in ['huobip', 'huobif', 'huobim']:
-            prefix = ''
-        else:
-            prefix = self.exchange
-        orderid = self.exchange + '/' + req.symbol + '-' + prefix + str(self.connect_time + self._new_order_id())
+        orderid = self.get_clientoid_prefix(req.symbol) + str(self.connect_time + self._new_order_id())
 
         data = {
             "contract": self.exchange + "/" + req.symbol,
@@ -410,7 +467,7 @@ class OnetokenDataWebsocketApi(WebsocketClient):
 
         self.gateway = gateway
         self.gateway_name = gateway.gateway_name
-        self.subscribed = {}
+        self.subscribed: Dict[str, SubscribeRequest] = {}
         self.ticks = {}
         self.callbacks = {
             "auth": self.on_login,
@@ -434,11 +491,12 @@ class OnetokenDataWebsocketApi(WebsocketClient):
             symbol=req.symbol,
             exchange=req.exchange,
             name=req.symbol,
-            datetime=datetime.now(CHINA_TZ),
+            datetime=datetime.now(),
             gateway_name=self.gateway_name,
         )
 
-        contract_symbol = f"{req.exchange.value.lower()}/{req.symbol.lower()}"
+        contract_symbol = contract_vnpy2ot(
+            req.exchange.value.lower(), req.symbol.lower())
         self.ticks[contract_symbol] = tick
 
         req = {
@@ -499,7 +557,8 @@ class OnetokenDataWebsocketApi(WebsocketClient):
             return
 
         tick.last_price = data["last"]
-        tick.datetime = generate_datetime(data["time"][:-6])
+        tick.datetime = datetime.strptime(
+            data["time"][:-6], "%Y-%m-%dT%H:%M:%S.%f")
 
         bids = data["bids"]
         asks = data["asks"]
@@ -530,7 +589,7 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
 
         self.key = ""
         self.secret = ""
-        self.exchange = ""
+        self.exchange = ""  # okex, okef, okswap, huobif...
         self.account = ""
 
         self.trade_count = 0
@@ -658,7 +717,7 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
             elif _type == "future":
                 long_position = PositionData(
                     symbol=account_data["contract"],
-                    exchange=Exchange(self.exchange.upper()),
+                    exchange=Exchange(exg_ot2vnpy(self.exchange)),
                     direction=Direction.LONG,
                     price=account_data["average_open_price_long"],
                     volume=account_data["total_amount_long"],
@@ -668,7 +727,7 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
                 )
                 short_position = PositionData(
                     symbol=account_data["contract"],
-                    exchange=Exchange(self.exchange.upper()),
+                    exchange=Exchange(exg_ot2vnpy(self.exchange)),
                     direction=Direction.SHORT,
                     price=account_data["average_open_price_short"],
                     volume=account_data["total_amount_short"],
@@ -684,14 +743,13 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
         for order_data in data:
             contract_symbol = order_data["contract"]
             exchange_str, symbol = contract_symbol.split("/")
-            timestamp = order_data["entrust_time"][:-6]
+            timestamp = order_data["entrust_time"]
 
             orderid = order_data["client_oid"]
 
             order = OrderData(
                 symbol=symbol,
-                # exchange=EXCHANGE_ONETOKEN2VT[exchange_str],
-                exchange=Exchange(map_exchange_1token_to_vnpy(exchange_str)),
+                exchange=Exchange(exg_ot2vnpy(exchange_str)),
                 orderid=orderid,
                 direction=DIRECTION_ONETOKEN2VT[order_data["bs"]],
                 price=order_data["entrust_price"],
@@ -717,7 +775,7 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
             if not order_data["last_dealt_amount"]:
                 return
 
-            trade_timestamp = order_data["last_update"][:-6]
+            trade_timestamp = order_data["last_update"]
             self.trade_count += 1
             if order_data["dealt_amount"]:
                 self.trade_count += 1
@@ -730,8 +788,7 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
                     price=order_data["average_dealt_price"],
                     volume=order_data["dealt_amount"],
                     gateway_name=self.gateway_name,
-                    datetime=generate_datetime(trade_timestamp)
-                )
+                    datetime=generate_datetime(trade_timestamp))
                 self.gateway.on_trade(trade)
 
     def ping(self):
@@ -740,6 +797,17 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
 
 
 def generate_datetime(timestamp: str) -> datetime:
+    """
+    "2020-12-25T18:33:28.098024+08:00"
+    "2020-12-25T10:33:28.098024+00:00"
+    "2020-12-25T10:33:28.098024Z"
+    :param timestamp:
+    :return:
+    """
+    if timestamp.endswith('Z'):
+        timestamp = timestamp[:-1]
+    else:
+        timestamp = timestamp[:-6]
     dt = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%f")
-    dt = CHINA_TZ.localize(dt)
+    dt = UTC_TZ.localize(dt)
     return dt
