@@ -338,7 +338,6 @@ class OnetokenRestApi(RestClient):
         contract_symbol = contract_vnpy2ot(
                     req.exchange.value.lower(), req.symbol.lower())
         for i in range(10):
-            REST_HOST = "https://cdn.1tokentrade.cn/api"
             path = f"/v1/quote/candles?contract={contract_symbol}&duration={req.interval.value}&since={begin}&until={end}"
             resp = requests.get(
                 REST_HOST+path,
