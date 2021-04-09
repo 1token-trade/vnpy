@@ -6,8 +6,9 @@ import hmac
 import json
 import sys
 import time
+import requests
 from copy import copy
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Lock
 from typing import Dict
 from urllib.parse import urlparse
@@ -22,11 +23,13 @@ from vnpy.trader.constant import (
     Exchange,
     Status,
     Offset,
-    Product
+    Product,
+    Interval
 )
 from vnpy.trader.event import EVENT_TIMER
 from vnpy.trader.gateway import BaseGateway
 from vnpy.trader.object import (
+    BarData,
     TickData,
     PositionData,
     AccountData,
@@ -35,7 +38,8 @@ from vnpy.trader.object import (
     SubscribeRequest,
     ContractData,
     OrderData,
-    TradeData
+    TradeData,
+    HistoryRequest
 )
 
 REST_HOST = "https://cdn.1tokentrade.cn/api"
@@ -54,6 +58,12 @@ EXCHANGE_VT2ONETOKEN = {
     Exchange.BINANCE: "binance",
     Exchange.BITMEX: "bitmex",
     Exchange.GATEIO: "gateio",
+}
+
+INTERVAL_VT2ONETOKEN = {
+    Interval.MINUTE: "1m",
+    Interval.HOUR: "1h",
+    Interval.DAILY: "1d",
 }
 
 # EXCHANGE_ONETOKEN2VT = {v: k for k, v in EXCHANGE_VT2ONETOKEN.items()}
@@ -83,7 +93,6 @@ def exg_ot2vnpy(exg):
 def exg_vnpy2ot(exg):
     """
     gateio/GATEIO -> gate
-
     :param exg:
     :return:
     """
@@ -96,7 +105,6 @@ def exg_vnpy2ot(exg):
 
 def contract_vnpy2ot(exg, name):
     """
-
     :param exg:  okex
     :param name:  btc.usd.q
     :return:
@@ -184,6 +192,10 @@ class OnetokenGateway(BaseGateway):
     def query_position(self):
         """"""
         pass
+
+    def query_history(self, req: HistoryRequest):
+        """"""
+        return self.rest_api.query_history(req)
 
     def close(self):
         """"""
@@ -274,7 +286,8 @@ class OnetokenRestApi(RestClient):
         self.exchange = exchange
         self.account = account
 
-        self.connect_time = int(datetime.now().strftime("%y%m%d%H%M%S")) * self.order_count
+        self.connect_time = int(datetime.now().strftime(
+            "%y%m%d%H%M%S")) * self.order_count
 
         self.init(REST_HOST, proxy_host, proxy_port)
 
@@ -316,6 +329,61 @@ class OnetokenRestApi(RestClient):
             callback=self.on_query_contract
         )
 
+    def query_history(self, req: HistoryRequest):
+        """"""
+        buf = {}
+        now = datetime.now()
+        end = str(int(now.replace(second=0,microsecond=0).timestamp()))
+        begin = str(int((now - timedelta(days=1)).replace(second=0,microsecond=0).timestamp()))
+        contract_symbol = contract_vnpy2ot(
+                    req.exchange.value.lower(), req.symbol.lower())
+        for i in range(10):
+            REST_HOST = "https://cdn.1tokentrade.cn/api"
+            path = f"/v1/quote/candles?contract={contract_symbol}&duration={req.interval.value}&since={begin}&until={end}"
+            resp = requests.get(
+                REST_HOST+path,
+            )
+
+            if resp.status_code // 100 != 2:
+                msg = f"获取历史数据失败，状态码：{resp.status_code}，信息：{resp.text}"
+                self.gateway.write_log(msg)
+                break
+            else:
+                data = resp.json()
+                if not data:
+                    msg = f"获取历史数据为空"
+                    self.gateway.write_log(msg)
+                    break
+
+                for i in data:
+                    dt = datetime.fromtimestamp(i['timestamp'])
+                    bar = BarData(
+                        symbol=req.symbol,
+                        exchange=req.exchange,
+                        datetime=dt,
+                        interval=req.interval,
+                        volume=float(i['volume']),
+                        open_price=float(i['open']),
+                        high_price=float(i['high']),
+                        low_price=float(i['low']),
+                        close_price=float(i['close']),
+                        gateway_name=self.gateway_name
+                        )
+                    buf[bar.datetime] = bar
+
+                begin = str(data[0]['timestamp'])
+                end = str(data[-1]['timestamp'])
+                msg = f"获取历史数据成功，{req.symbol} - {req.interval.value}，{datetime.fromtimestamp(int(begin))} - {datetime.fromtimestamp(int(end))}"
+                end = begin 
+                begin = str(int((datetime.fromtimestamp(int(end)) - timedelta(days=1)).timestamp()))
+                self.gateway.write_log(msg)
+
+        index = list(buf.keys())
+        index.sort()
+
+        history = [buf[i] for i in index]
+        return history
+
     def on_query_contract(self, data, request):
         """"""
         for instrument_data in data:
@@ -328,6 +396,7 @@ class OnetokenRestApi(RestClient):
                 product=Product.SPOT,  # todo
                 size=float(instrument_data["min_amount"]),
                 pricetick=float(instrument_data["unit_amount"]),
+                history_data=True,
                 gateway_name=self.gateway_name
             )
             self.gateway.on_contract(contract)
@@ -337,7 +406,6 @@ class OnetokenRestApi(RestClient):
 
     def get_clientoid_prefix(self, contract):
         """
-
         :param contract:  btc.usdt
         :return:
         """
@@ -366,11 +434,13 @@ class OnetokenRestApi(RestClient):
         self.gateway.write_log(f"获取账户信息失败 {request.response.json()}")
 
     def on_get_info_error(self, exception_type: type, exception_value: Exception, tb, request: Request):
-        self.gateway.write_log(f"获取账户信息失败 {exception_type} {exception_value} {tb} {request}")
+        self.gateway.write_log(
+            f"获取账户信息失败 {exception_type} {exception_value} {tb} {request}")
 
     def send_order(self, req: OrderRequest):
         """"""
-        orderid = self.get_clientoid_prefix(req.symbol) + str(self.connect_time + self._new_order_id())
+        orderid = self.get_clientoid_prefix(
+            req.symbol) + str(self.connect_time + self._new_order_id())
 
         data = {
             "contract": self.exchange + "/" + req.symbol,
