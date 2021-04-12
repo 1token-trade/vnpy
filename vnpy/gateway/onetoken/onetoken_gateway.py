@@ -333,7 +333,7 @@ class OnetokenRestApi(RestClient):
         """"""
         buf = {}
         now = datetime.now()
-        end = str(int(now.replace(second=0,microsecond=0).timestamp()))
+        end = str(int(now.replace(microsecond=0).timestamp()))
         begin = str(int((now - timedelta(days=1)).replace(second=0,microsecond=0).timestamp()))
         contract_symbol = contract_vnpy2ot(
                     req.exchange.value.lower(), req.symbol.lower())
@@ -841,8 +841,8 @@ class OnetokenTradeWebsocketApi(WebsocketClient):
             self.gateway.on_order(order)
 
             # Push trade data
-            if not order_data["last_dealt_amount"]:
-                return
+            # if not order_data["last_dealt_amount"]:
+            #     return
 
             trade_timestamp = order_data["last_update"]
             self.trade_count += 1
